@@ -215,8 +215,8 @@ export default defineConfig(async () => {
     server: {
       // Windows binds "localhost" to IPv6 only, while cloudflared connects over IPv4.
       host: "0.0.0.0",
-      // Quick Tunnels and ngrok free hostnames change every run.
-      allowedHosts: [".trycloudflare.com", ".ngrok-free.dev"],
+      // Tunnel and preview hostnames change every run.
+      allowedHosts: [".trycloudflare.com", ".ngrok-free.dev", ".vercel.app"],
       watch: {
         ignored: ["**/public/music/**"],
         ...(isCodexSeatbeltSandbox ? { useFsEvents: false, usePolling: true } : {}),
