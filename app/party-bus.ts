@@ -1,23 +1,10 @@
 type SendOptions = { target?: string | string[] };
 type ActionHandler = (data: unknown, meta: { peerId: string }) => void;
-type MqttClient = {
-  connected: boolean;
-  subscribe: (topic: string, callback: (error?: Error) => void) => void;
-  publish: (topic: string, message: string) => void;
-  on: (event: string, listener: (...args: never[]) => void) => void;
-  end: (force?: boolean) => void;
-};
+type OutEvent = { action: string; target?: string | string[]; data: unknown };
 
-const BROKERS = [
-  "wss://broker.emqx.io:8084/mqtt",
-  "wss://broker.hivemq.com:8884/mqtt",
-  "wss://test.mosquitto.org:8081/mqtt",
-];
-
-function decodePayload(payload: unknown) {
-  if (typeof payload === "string") return payload;
-  if (payload instanceof Uint8Array) return new TextDecoder().decode(payload);
-  return "";
+function topicFor(roomId: string) {
+  const slug = roomId.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "room";
+  return `hb-${slug}`;
 }
 
 export function joinParty(
@@ -25,26 +12,42 @@ export function joinParty(
   selfId: string,
   hooks: { onStatus: (status: "connected" | "error") => void },
 ) {
-  const topic = `hb/${roomId}`;
+  const topic = topicFor(roomId);
   const handlers = new Map<string, ActionHandler>();
-  const seen = new Map<string, number>();
-  const queue: string[] = [];
+  const seenPeers = new Map<string, number>();
+  const seenIds = new Set<string>();
+  const pending: OutEvent[] = [];
   let closed = false;
-  let attempt = 0;
-  let client: MqttClient | null = null;
+  let seq = 0;
+  let flushTimer = 0;
+  let errorTimer = 0;
+  let lastFlush = 0;
   const room = {
     onPeerJoin: (_peerId: string) => undefined,
     onPeerLeave: (_peerId: string) => undefined,
     leave() {
       closed = true;
+      window.clearTimeout(flushTimer);
+      window.clearTimeout(errorTimer);
       window.clearInterval(sweep);
-      client?.end(true);
-      client = null;
+      source.close();
     },
     makeAction<T>(name: string) {
       const action = {
         send(data: T, options?: SendOptions) {
-          publish(JSON.stringify({ from: selfId, action: name, target: options?.target, data }));
+          const next: OutEvent = { action: name, target: options?.target, data };
+          const sticky = next.target === undefined && ["presence", "player", "music", "spotlight", "room-info"].includes(name);
+          const existing = sticky ? pending.findIndex((item) => item.action === name && item.target === undefined) : -1;
+          if (existing >= 0) pending[existing] = next;
+          else pending.push(next);
+          if (pending.length > 40) pending.splice(0, pending.length - 40);
+          if (!flushTimer) {
+            const wait = Math.max(40, 6000 - (Date.now() - lastFlush));
+            flushTimer = window.setTimeout(() => {
+              flushTimer = 0;
+              void flush();
+            }, wait);
+          }
           return Promise.resolve();
         },
         onMessage(_data: T, _meta: { peerId: string }) {
@@ -56,94 +59,86 @@ export function joinParty(
     },
   };
 
-  function publish(body: string) {
-    if (client?.connected) client.publish(topic, body);
-    else queue.push(body);
-    if (queue.length > 40) queue.splice(0, queue.length - 40);
+  function deliver(from: string, event: OutEvent) {
+    if (typeof event.target === "string" && event.target !== selfId) return;
+    if (Array.isArray(event.target) && !event.target.includes(selfId)) return;
+    const now = Date.now();
+    if (!seenPeers.has(from)) room.onPeerJoin(from);
+    seenPeers.set(from, now);
+    if (typeof event.action === "string") handlers.get(event.action)?.(event.data, { peerId: from });
   }
 
-  function handleMessage(payload: unknown) {
-    let message: { from?: unknown; action?: unknown; target?: unknown; data?: unknown };
+  async function flush() {
+    if (closed || pending.length === 0) return;
+    const batch = pending.splice(0);
+    const body = JSON.stringify({ id: `${selfId}:${++seq}`, from: selfId, batch });
+    lastFlush = Date.now();
     try {
-      message = JSON.parse(decodePayload(payload));
+      const response = await fetch(`https://ntfy.sh/${topic}`, { method: "POST", body });
+      if (response.status === 429) {
+        pending.unshift(...batch);
+        const retry = Number(response.headers.get("retry-after")) || 12;
+        if (!flushTimer) {
+          flushTimer = window.setTimeout(() => {
+            flushTimer = 0;
+            void flush();
+          }, retry * 1000);
+        }
+        return;
+      }
+      if (!response.ok) throw new Error(String(response.status));
+      window.clearTimeout(errorTimer);
+      hooks.onStatus("connected");
+    } catch {
+      pending.unshift(...batch);
+      if (!errorTimer) errorTimer = window.setTimeout(() => hooks.onStatus("error"), 8000);
+    }
+  }
+
+  const source = new EventSource(`https://ntfy.sh/${topic}/sse`);
+  source.onopen = () => {
+    window.clearTimeout(errorTimer);
+    errorTimer = 0;
+    hooks.onStatus("connected");
+  };
+  source.onerror = () => {
+    if (closed || errorTimer) return;
+    errorTimer = window.setTimeout(() => hooks.onStatus("error"), 8000);
+  };
+  source.onmessage = (event) => {
+    let wrapper: { event?: string; message?: string };
+    try {
+      wrapper = JSON.parse(event.data);
     } catch {
       return;
     }
-    if (!message || typeof message.from !== "string" || message.from === selfId || typeof message.action !== "string") return;
-    if (typeof message.target === "string" && message.target !== selfId) return;
-    if (Array.isArray(message.target) && !message.target.includes(selfId)) return;
-    const now = Date.now();
-    if (!seen.has(message.from)) room.onPeerJoin(message.from);
-    seen.set(message.from, now);
-    handlers.get(message.action)?.(message.data, { peerId: message.from });
-  }
-
-  async function start(index: number) {
-    if (closed) return;
-    const generation = ++attempt;
-    const mqttModule = await import("mqtt/dist/mqtt.esm") as { default?: unknown; connect?: unknown };
-    if (closed || generation !== attempt) return;
-    const imported = mqttModule.default ?? mqttModule;
-    const connect = (typeof imported === "function" ? imported : (imported as { connect?: unknown }).connect) as
-      | ((url: string, options: Record<string, unknown>) => MqttClient)
-      | undefined;
-    if (!connect) {
-      hooks.onStatus("error");
+    if (wrapper.event !== "message" || typeof wrapper.message !== "string") return;
+    let message: { id?: unknown; from?: unknown; batch?: unknown };
+    try {
+      message = JSON.parse(wrapper.message);
+    } catch {
       return;
     }
-    const next = connect(BROKERS[index % BROKERS.length], {
-      clientId: `hb${selfId.replace(/[^a-z0-9]/gi, "").slice(-8)}${Math.random().toString(16).slice(2, 8)}`.slice(0, 23),
-      clean: true,
-      reconnectPeriod: 0,
-      connectTimeout: 8000,
-      protocolVersion: 4,
-    });
-    client = next;
-    let settled = false;
-    let handedOff = false;
-    const giveUp = () => {
-      if (closed || handedOff || generation !== attempt) return;
-      handedOff = true;
-      next.end(true);
-      if (client === next) client = null;
-      if (index + 1 >= BROKERS.length) hooks.onStatus("error");
-      window.setTimeout(() => start((index + 1) % BROKERS.length), 600);
-    };
-    const timer = window.setTimeout(giveUp, 9000);
-    next.on("message", ((_topic: string, payload: unknown) => {
-      if (generation === attempt) handleMessage(payload);
-    }) as (...args: never[]) => void);
-    next.on("connect", (() => {
-      if (generation !== attempt) return;
-      window.clearTimeout(timer);
-      next.subscribe(topic, (error) => {
-        if (generation !== attempt) return;
-        if (error) {
-          giveUp();
-          return;
-        }
-        settled = true;
-        hooks.onStatus("connected");
-        for (const body of queue.splice(0)) next.publish(topic, body);
-      });
-    }) as (...args: never[]) => void);
-    next.on("error", giveUp as (...args: never[]) => void);
-    next.on("close", (() => {
-      if (closed || handedOff || generation !== attempt || !settled) return;
-      handedOff = true;
-      void start(index);
-    }) as (...args: never[]) => void);
-  }
+    if (!message || typeof message.from !== "string" || message.from === selfId || !Array.isArray(message.batch)) return;
+    if (typeof message.id === "string") {
+      if (seenIds.has(message.id)) return;
+      seenIds.add(message.id);
+      if (seenIds.size > 400) seenIds.delete(seenIds.values().next().value ?? "");
+    }
+    for (const item of message.batch) {
+      if (!item || typeof item !== "object") continue;
+      deliver(message.from, item as OutEvent);
+    }
+  };
 
   const sweep = window.setInterval(() => {
     const now = Date.now();
-    for (const [peerId, seenAt] of seen) {
-      if (now - seenAt < 7000) continue;
-      seen.delete(peerId);
+    for (const [peerId, seenAt] of seenPeers) {
+      if (now - seenAt < 18000) continue;
+      seenPeers.delete(peerId);
       room.onPeerLeave(peerId);
     }
   }, 1000);
 
-  void start(0);
   return room;
 }
