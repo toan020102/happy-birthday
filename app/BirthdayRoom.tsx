@@ -173,11 +173,9 @@ const ACTIONS: AvatarAction[] = ["idle", "wave", "jump", "dance", "toast", "bow"
 const EMPTY_MUSIC: MusicState = { trackId: "", isPlaying: false, startedAt: 0, updatedAt: 0 };
 const EMPTY_SPOTLIGHT: Spotlight = { token: "", updatedAt: 0 };
 const ROOM_RELAYS = [
-  "wss://relay.damus.io",
-  "wss://nos.lol",
-  "wss://relay.primal.net",
-  "wss://nostr.wine",
-  "wss://relay.nostr.band",
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://test.mosquitto.org:8081/mqtt",
 ];
 
 function safeText(value: unknown, max: number) {
@@ -515,14 +513,11 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
     const pendingLeaves = new Map<string, number>();
     const greetTimers = new Set<number>();
 
-    import("trystero")
+    import("@trystero-p2p/mqtt")
       .then(({ joinRoom }) => {
         if (cancelled) return;
-        const localRelay = location.hostname === "localhost" || location.hostname === "127.0.0.1"
-          ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/party-relay`
-          : "";
         const room = joinRoom(
-          { appId: config.appId, password: config.roomId, relayConfig: { urls: [localRelay, ...ROOM_RELAYS].filter(Boolean), warnOnRelayFailure: false } },
+          { appId: config.appId, password: config.roomId, relayConfig: { urls: ROOM_RELAYS, warnOnRelayFailure: false } },
           config.roomId,
           { onJoinError: () => undefined },
         );
