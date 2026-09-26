@@ -66,7 +66,6 @@ type Track = { id: string; title: string; artist: string; src: string; bpm?: num
 type MusicState = { trackId: string; isPlaying: boolean; startedAt: number; updatedAt: number };
 type RoomInfo = { birthdayName: string; roomTitle: string; roomMessage: string; updatedAt: number };
 type Spotlight = { token: string; updatedAt: number };
-type HostClaim = { token: string; since: number; established?: boolean };
 type RoomEffect = { type: "confetti" | "toast"; at: number };
 type Presence = { token: string; joinedAt: number };
 type SendOptions = { target?: string | string[] };
@@ -312,12 +311,10 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
   const [joinedAt, setJoinedAt] = useState(0);
   const [player, setPlayer] = useState<PlayerState | null>(null);
   const [peers, setPeers] = useState<Record<string, PlayerState>>({});
-  const [presences, setPresences] = useState<Record<string, Presence>>({});
   const [wishes, setWishes] = useState<Wish[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [music, setMusic] = useState<MusicState>(EMPTY_MUSIC);
   const [spotlight, setSpotlight] = useState<Spotlight>(EMPTY_SPOTLIGHT);
-  const [hostClaim, setHostClaim] = useState<HostClaim | null>(null);
   const [roomInfo, setRoomInfo] = useState<RoomInfo>({
     birthdayName: config.birthdayName,
     roomTitle: config.roomTitle,
@@ -344,7 +341,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
   const playerRef = useRef<PlayerState | null>(null);
   const musicRef = useRef<MusicState>(EMPTY_MUSIC);
   const spotlightRef = useRef<Spotlight>(EMPTY_SPOTLIGHT);
-  const hostClaimRef = useRef<HostClaim | null>(null);
   const roomInfoRef = useRef<RoomInfo>(roomInfo);
   const isHostRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -354,7 +350,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
   const effectSendRef = useRef<SendAction<RoomEffect> | null>(null);
   const musicSendRef = useRef<SendAction<MusicState> | null>(null);
   const spotlightSendRef = useRef<SendAction<Spotlight> | null>(null);
-  const hostSendRef = useRef<SendAction<HostClaim> | null>(null);
   const roomInfoSendRef = useRef<SendAction<RoomInfo> | null>(null);
   const actionTimerRef = useRef<number | null>(null);
   const seenWishIdsRef = useRef<Set<string>>(new Set());
@@ -369,8 +364,8 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
     if (player) everyone.push(["self", player]);
     return everyone.sort(([, a], [, b]) => a.joinedAt - b.joinedAt || a.token.localeCompare(b.token));
   }, [peerList, player]);
-  const electedHostToken = hostClaim?.token ?? "";
-  const isHost = Boolean(player && electedHostToken === clientToken);
+  const electedHostToken = orderedPlayers[0]?.[1].token ?? "";
+  const isHost = Boolean(player && electedHostToken === player.token);
   const usedAvatarIds = useMemo(() => new Set(peerList.map(([, guest]) => guest.avatarId)), [peerList]);
   const placedPlayers = useMemo(() => {
     const slots = stageSlotsRef.current;
@@ -389,11 +384,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
   const floorPlayers = useMemo(() => placedPlayers.filter((entry) => entry !== stageStar), [placedPlayers, stageStar]);
   const crowded = floorPlayers.length > 8;
   const narrowFrame = frame.width < 760;
-  const hostStorageKey = `birthday-host:${config.roomId}`;
-  const peerCountRef = useRef(0);
-  const presencesRef = useRef(presences);
-  peerCountRef.current = peerList.length + Object.keys(presences).length;
-  presencesRef.current = presences;
   const shortFrame = frame.height < 540;
   const playerSize = shortFrame
     ? crowded ? 72 : 88
@@ -412,8 +402,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
 
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
-      const sessionJoinedAt = timestamp() + Math.random();
-      setJoinedAt(sessionJoinedAt);
       const savedProfile = loadJson<Partial<GuestProfile> & { style?: string }>(profileKey);
       localStorage.removeItem(`birthday-wishes:${config.roomId}`);
       localStorage.removeItem(`birthday-polls:${config.roomId}`);
@@ -429,20 +417,25 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
         setRoomInfo(nextInfo);
         setRoomInfoDraft(nextInfo);
       }
+      const token = savedProfile?.token && safeText(savedProfile.name, 24) ? savedProfile.token : randomId();
+      const arrivedKey = `birthday-arrived:${config.roomId}:${token}`;
+      const savedArrived = Number(localStorage.getItem(arrivedKey));
+      const arrived = Number.isFinite(savedArrived) && savedArrived > 0 ? savedArrived : Date.now();
+      localStorage.setItem(arrivedKey, String(arrived));
+      setClientToken(token);
+      setJoinedAt(arrived);
       if (savedProfile?.token && safeText(savedProfile.name, 24)) {
         const legacyAvatar: AvatarId = savedProfile.style === "nu" ? "coral" : savedProfile.style === "nam" ? "ocean" : "violet";
         const nextProfile: GuestProfile = {
-          token: savedProfile.token,
+          token,
           name: safeText(savedProfile.name, 24),
           avatarId: isAvatarId(savedProfile.avatarId) ? savedProfile.avatarId : legacyAvatar,
         };
-        setClientToken(nextProfile.token);
-        const nextPlayer: PlayerState = { ...nextProfile, ...spawnFor(nextProfile.token), joinedAt: sessionJoinedAt, action: "idle" };
+        const nextPlayer: PlayerState = { ...nextProfile, ...spawnFor(token), joinedAt: arrived, action: "idle" };
         setProfile(nextProfile);
         setPlayer(nextPlayer);
         playerRef.current = nextPlayer;
       } else {
-        setClientToken(randomId());
         setShowSetup(true);
       }
     });
@@ -485,42 +478,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
   useEffect(() => { if (audioRef.current) audioRef.current.volume = volume; }, [volume]);
   useEffect(() => {
-    if (!clientToken) return;
-    const saved = loadJson<HostClaim>(hostStorageKey);
-    if (saved?.token === clientToken && typeof saved.since === "number" && !hostClaimRef.current) {
-      const claim = { token: saved.token, since: saved.since, established: true };
-      hostClaimRef.current = claim;
-      setHostClaim(claim);
-    }
-  }, [clientToken, hostStorageKey]);
-  useEffect(() => {
-    if (connection !== "connected" || !clientToken || !joinedAt || hostClaim) return;
-    let confirmTimer = 0;
-    const timer = window.setTimeout(() => {
-      if (hostClaimRef.current) return;
-      const earliest = [{ token: clientToken, joinedAt }, ...Object.values(presencesRef.current)]
-        .sort((a, b) => a.joinedAt - b.joinedAt || a.token.localeCompare(b.token))[0];
-      if (!earliest || earliest.token !== clientToken) return;
-      const claim = { token: clientToken, since: joinedAt, established: false };
-      hostClaimRef.current = claim;
-      setHostClaim(claim);
-      sendQuietly(hostSendRef.current, claim);
-      confirmTimer = window.setTimeout(() => {
-        const current = hostClaimRef.current;
-        if (!current || current.token !== clientToken || current.established) return;
-        const confirmed = { ...current, established: true };
-        hostClaimRef.current = confirmed;
-        setHostClaim(confirmed);
-        localStorage.setItem(hostStorageKey, JSON.stringify(confirmed));
-        sendQuietly(hostSendRef.current, confirmed);
-      }, 12000);
-    }, peerCountRef.current > 0 ? 3000 : 7000);
-    return () => {
-      window.clearTimeout(timer);
-      if (!hostClaimRef.current || hostClaimRef.current.token !== clientToken) window.clearTimeout(confirmTimer);
-    };
-  }, [connection, clientToken, hostClaim, hostStorageKey, joinedAt, peerList.length]);
-  useEffect(() => {
     if (!player) return;
     const conflicts = [player, ...peerList.map(([, guest]) => guest)]
       .filter((guest) => guest.avatarId === player.avatarId)
@@ -561,9 +518,11 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
     import("trystero")
       .then(({ joinRoom }) => {
         if (cancelled) return;
-        const localRelay = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/party-relay`;
+        const localRelay = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+          ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/party-relay`
+          : "";
         const room = joinRoom(
-          { appId: config.appId, password: config.roomId, relayConfig: { urls: [localRelay, ...ROOM_RELAYS], warnOnRelayFailure: false } },
+          { appId: config.appId, password: config.roomId, relayConfig: { urls: [localRelay, ...ROOM_RELAYS].filter(Boolean), warnOnRelayFailure: false } },
           config.roomId,
           { onJoinError: () => undefined },
         );
@@ -574,7 +533,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
         const effectAction = room.makeAction<RoomEffect>("effect");
         const musicAction = room.makeAction<MusicState>("music");
         const spotlightAction = room.makeAction<Spotlight>("spotlight");
-        const hostAction = room.makeAction<HostClaim>("host");
         const roomInfoAction = room.makeAction<RoomInfo>("room-info");
         presenceSendRef.current = presenceAction.send;
         playerSendRef.current = playerAction.send;
@@ -582,21 +540,9 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
         effectSendRef.current = effectAction.send;
         musicSendRef.current = musicAction.send;
         spotlightSendRef.current = spotlightAction.send;
-        hostSendRef.current = hostAction.send;
         roomInfoSendRef.current = roomInfoAction.send;
 
-        presenceAction.onMessage = (incoming, { peerId }) => {
-          const token = safeText(incoming?.token, 80);
-          if (!token || typeof incoming.joinedAt !== "number") return;
-          setPresences((current) => {
-            const previous = current[peerId];
-            const duplicateIds = Object.entries(current).filter(([id, presence]) => id !== peerId && presence.token === token).map(([id]) => id);
-            if (previous?.token === token && previous.joinedAt === incoming.joinedAt && duplicateIds.length === 0) return current;
-            const next = { ...current, [peerId]: { token, joinedAt: incoming.joinedAt } };
-            for (const id of duplicateIds) delete next[id];
-            return next;
-          });
-        };
+        presenceAction.onMessage = () => undefined;
 
         playerAction.onMessage = (incoming, { peerId }) => {
           if (!incoming || typeof incoming !== "object") return;
@@ -643,28 +589,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
           setSpotlight(next);
         };
 
-        hostAction.onMessage = (incoming) => {
-          const token = safeText(incoming?.token, 80);
-          if (!token || typeof incoming?.since !== "number") return;
-          const current = hostClaimRef.current;
-          const next: HostClaim = { token, since: incoming.since, established: incoming.established === true };
-          if (current?.token === token) {
-            if (next.established && !current.established) {
-              hostClaimRef.current = next;
-              setHostClaim(next);
-              localStorage.setItem(hostStorageKey, JSON.stringify(next));
-            }
-            return;
-          }
-          const sameStanding = Boolean(current?.established) === next.established;
-          const earlier = Boolean(current) && (next.since < current.since || (next.since === current.since && next.token < current.token));
-          const incomingWins = !current || (!current.established && next.established) || (sameStanding && earlier);
-          if (!incomingWins) return;
-          hostClaimRef.current = next;
-          setHostClaim(next);
-          localStorage.setItem(hostStorageKey, JSON.stringify(next));
-        };
-
         roomInfoAction.onMessage = (incoming) => {
           if (!incoming || typeof incoming.updatedAt !== "number" || incoming.updatedAt <= roomInfoRef.current.updatedAt) return;
           const next: RoomInfo = {
@@ -685,7 +609,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
           if (playerRef.current) sendQuietly(playerAction.send, playerRef.current, options);
           if (musicRef.current.trackId) sendQuietly(musicAction.send, musicRef.current, options);
           if (spotlightRef.current.updatedAt) sendQuietly(spotlightAction.send, spotlightRef.current, options);
-          if (hostClaimRef.current) sendQuietly(hostAction.send, hostClaimRef.current, options);
           if (isHostRef.current && roomInfoRef.current.updatedAt) sendQuietly(roomInfoAction.send, roomInfoRef.current, options);
         };
         const greet = (peerId: string) => {
@@ -712,12 +635,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
               delete next[peerId];
               return next;
             });
-            setPresences((current) => {
-              if (!current[peerId]) return current;
-              const next = { ...current };
-              delete next[peerId];
-              return next;
-            });
           }, 2200);
           pendingLeaves.set(peerId, timer);
         };
@@ -739,7 +656,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
       effectSendRef.current = null;
       musicSendRef.current = null;
       spotlightSendRef.current = null;
-      hostSendRef.current = null;
       roomInfoSendRef.current = null;
       leaveRoom?.();
     };
@@ -989,7 +905,7 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
           <div className="hud-title">
             <span className={`live-dot ${connection === "error" ? "is-error" : ""}`} />
             <span className="hud-room-icon" aria-hidden="true">🎂</span>
-            <div><small>{roomInfo.roomTitle || "PHÒNG SINH NHẬT"}</small><strong>{roomInfo.birthdayName}</strong></div>
+            <div><small>Mã phòng {config.roomId}</small><strong>{roomInfo.birthdayName}</strong></div>
           </div>
           <div className="now-playing" data-playing={music.isPlaying}>
             <span className="music-status" aria-hidden="true">{music.isPlaying ? "♫" : "♪"}</span>

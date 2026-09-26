@@ -9,8 +9,8 @@ export default function Home() {
         roomMessage:
           process.env.NEXT_PUBLIC_ROOM_MESSAGE ??
           "Một căn phòng nhỏ, thật nhiều niềm vui và những lời chúc chỉ dành riêng cho bạn.",
-        roomId: process.env.NEXT_PUBLIC_ROOM_ID ?? "minh-anh-birthday-2026",
-        appId: process.env.NEXT_PUBLIC_APP_ID ?? "happy-birthday-2d-v1",
+        roomId: "KHEBEER",
+        appId: "happy-birthday-khebeer",
         musicManifest: process.env.NEXT_PUBLIC_MUSIC_MANIFEST ?? "/music/playlist.json",
       }}
     />
