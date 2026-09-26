@@ -1,40 +1,24 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import "./globals.css";
 
 const birthdayName = process.env.NEXT_PUBLIC_BIRTHDAY_NAME ?? "Trần Thế";
 
-export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
-  const forwardedProtocol = requestHeaders.get("x-forwarded-proto")?.split(",")[0];
-  const protocol = forwardedProtocol === "http" ? "http" : "https";
-  let metadataBase = new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
-  if (host) {
-    try {
-      metadataBase = new URL(`${protocol}://${host}`);
-    } catch {
-      // Giữ URL từ ENV nếu proxy gửi Host không hợp lệ.
-    }
-  }
-
-  return {
-    metadataBase,
-    title: `Phòng sinh nhật của ${birthdayName}`,
-    description: `Vào phòng tiệc 2D và cùng gửi lời chúc tới ${birthdayName}.`,
-    openGraph: {
-      title: `Cùng chúc mừng sinh nhật ${birthdayName}!`,
-      description: "Tạo nhân vật 2D, gặp bạn bè và để lại một lời chúc thật vui.",
-      images: [{ url: "/og.png", width: 1536, height: 1024, alt: "Phòng sinh nhật 2D" }],
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `Cùng chúc mừng sinh nhật ${birthdayName}!`,
-      description: "Tạo nhân vật 2D, gặp bạn bè và để lại một lời chúc thật vui.",
-      images: ["/og.png"],
-    },
-  };
-}
+export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  title: `Phòng sinh nhật của ${birthdayName}`,
+  description: `Vào phòng tiệc 2D và cùng gửi lời chúc tới ${birthdayName}.`,
+  openGraph: {
+    title: `Cùng chúc mừng sinh nhật ${birthdayName}!`,
+    description: "Tạo nhân vật 2D, gặp bạn bè và để lại một lời chúc thật vui.",
+    images: [{ url: "/og.png", width: 1536, height: 1024, alt: "Phòng sinh nhật 2D" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `Cùng chúc mừng sinh nhật ${birthdayName}!`,
+    description: "Tạo nhân vật 2D, gặp bạn bè và để lại một lời chúc thật vui.",
+    images: ["/og.png"],
+  },
+};
 
 const zaloBrowserGuard = `
   var zaloJSV2 = window.zaloJSV2 || function () { return null; };
