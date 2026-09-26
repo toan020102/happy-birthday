@@ -1,0 +1,41 @@
+[
+  {
+    "id": "khuc-hat-mung-sinh-nhat",
+    "title": "Khúc Hát Mừng Sinh Nhật Remix",
+    "artist": "Lương Gia Huy",
+    "src": "/music/Khúc Hát Mừng Sinh Nhật Remix.mp3",
+    "bpm": 128
+  },
+  {
+    "id": "co-minh-va-ta",
+    "title": "Có Mình Và Ta - Remix",
+    "artist": "Nguyễn Vĩ",
+    "src": "/music/Có Mình Và Ta - Remix.mp3",
+    "bpm": 128
+  },
+  {
+    "id": "phim-ba-nguoi",
+    "title": "Phim Ba Người (MK Remix)",
+    "artist": "Nguyễn Vĩ",
+    "src": "/music/Phim Ba Người (MK Remix).mp3",
+    "bpm": 130
+  },
+  {
+    "id": "ke-say-tinh",
+    "title": "Kẻ Say Tình",
+    "artist": "Quốc Thiên",
+    "src": "/music/Kẻ Say Tình.mp3"
+  },
+  {
+    "id": "ke-say-tinh-2",
+    "title": "Kẻ Say Tình 2",
+    "artist": "Quốc Thiên",
+    "src": "/music/Kẻ Say Tình 2.mp3"
+  },
+  {
+    "id": "ke-say-tinh-3",
+    "title": "Kẻ Say Tình 3 (Ngày Gió Giông)",
+    "artist": "Quốc Thiên",
+    "src": "/music/Kẻ Say Tình 3 (Ngày Gió Giông).mp3"
+  }
+]
