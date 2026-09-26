@@ -103,7 +103,7 @@ test("birthday room source has product UI and no starter preview", async () => {
   assert.equal(playlist.length, 6);
   assert.doesNotMatch(room, /WASD|touch-dpad|onKeyDown/);
   assert.match(room, /localStorage/);
-  assert.match(room, /trystero/);
+  assert.match(room, /party-bus/);
   assert.match(room, /sendQuietly/);
   assert.doesNotMatch(room, /void \w+SendRef\.current/);
   assert.doesNotMatch(`${page}\n${layout}`, /codex-preview|SkeletonPreview/);

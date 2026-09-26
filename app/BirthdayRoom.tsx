@@ -172,11 +172,6 @@ const BASE_ACTION_SPEEDS: Record<AvatarAction, number> = {
 const ACTIONS: AvatarAction[] = ["idle", "wave", "jump", "dance", "toast", "bow", "cheer", "groove", "shuffle", "bounce", "twist", "disco", "signature"];
 const EMPTY_MUSIC: MusicState = { trackId: "", isPlaying: false, startedAt: 0, updatedAt: 0 };
 const EMPTY_SPOTLIGHT: Spotlight = { token: "", updatedAt: 0 };
-const ROOM_RELAYS = [
-  "wss://broker.emqx.io:8084/mqtt",
-  "wss://broker.hivemq.com:8884/mqtt",
-  "wss://test.mosquitto.org:8081/mqtt",
-];
 
 function safeText(value: unknown, max: number) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -513,14 +508,14 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
     const pendingLeaves = new Map<string, number>();
     const greetTimers = new Set<number>();
 
-    import("@trystero-p2p/mqtt")
-      .then(({ joinRoom }) => {
+    import("./party-bus")
+      .then(({ joinParty }) => {
         if (cancelled) return;
-        const room = joinRoom(
-          { appId: config.appId, password: config.roomId, relayConfig: { urls: ROOM_RELAYS, warnOnRelayFailure: false } },
-          config.roomId,
-          { onJoinError: () => undefined },
-        );
+        const room = joinParty(config.roomId, clientToken, {
+          onStatus: (status) => {
+            if (!cancelled) setConnection(status);
+          },
+        });
         leaveRoom = () => room.leave();
         const presenceAction = room.makeAction<Presence>("presence");
         const playerAction = room.makeAction<PlayerState>("player");
@@ -635,7 +630,6 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
         };
         const pulseId = window.setInterval(() => announce(), 2000);
         pulse = pulseId;
-        setConnection("connected");
         announce();
       })
       .catch(() => setConnection("error"));
@@ -898,7 +892,7 @@ export default function BirthdayRoom({ config }: { config: RoomConfig }) {
 
         <header className="game-hud">
           <div className="hud-title">
-            <span className={`live-dot ${connection === "error" ? "is-error" : ""}`} />
+            <span className={`live-dot ${connection === "error" ? "is-error" : ""}`} data-connection={connection} />
             <span className="hud-room-icon" aria-hidden="true">🎂</span>
             <div><small>Mã phòng {config.roomId}</small><strong>{roomInfo.birthdayName}</strong></div>
           </div>
